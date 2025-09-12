@@ -3,8 +3,6 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
-from sklearn.multiclass import OneVsRestClassifier
 from sklearn.metrics import classification_report
 from imblearn.over_sampling import SMOTE
 
@@ -28,7 +26,7 @@ print('Decision Tree Classification Report:')
 print(classification_report(y_test, dt_pred))
 
 # 2. Random Forest (class_weight='balanced')
-rf = RandomForestClassifier(class_weight='balanced', random_state=42)
+rf = RandomForestClassifier(n_estimators=30,class_weight='balanced', random_state=42)
 rf.fit(X_train, y_train)
 rf_pred = rf.predict(X_test)
 print('Random Forest Classification Report:')
@@ -47,7 +45,7 @@ print('Decision Tree (Over-sampled) Classification Report:')
 print(classification_report(y_test, dt_resampled_pred))
 
 # 4. RandomForestClassifier with over-sampling
-rf_resampled = RandomForestClassifier(class_weight='balanced', random_state=42)
+rf_resampled = RandomForestClassifier(n_estimators=30,class_weight='balanced', random_state=42)
 rf_resampled.fit(X_resampled, y_resampled)
 rf_resampled_pred = rf_resampled.predict(X_test)
 print('Random Forest (Over-sampled) Classification Report:')
