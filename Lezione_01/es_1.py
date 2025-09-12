@@ -1,5 +1,7 @@
 # #### Setup iniziale
 import pandas as pd
+import matplotlib.pyplot as plt
+import sklearn
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
@@ -17,9 +19,9 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 
 # Decision Tree
-tree = DecisionTreeClassifier(max_depth=5, random_state=42)
-tree.fit(X_train, y_train)
-y_pred_tree = tree.predict(X_test)
+dtree = DecisionTreeClassifier(max_depth=5, random_state=42)
+dtree.fit(X_train, y_train)
+y_pred_tree = dtree.predict(X_test)
 
 #### Output
 
@@ -31,10 +33,7 @@ print("Decision Tree:")
 print(classification_report(y_test, y_pred_tree, digits=3))
 
 
-
-
-
-
-
-
-
+# Plot the decision tree
+plt.figure(figsize=(12,8))
+sklearn.tree.plot_tree(dtree, filled=True, feature_names=X.columns, class_names=dtree.classes_)
+plt.show()

@@ -5,8 +5,6 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import cross_val_score
 import matplotlib.pyplot as plt
 
-
-
 # Load dataset
 df = pd.read_csv("creditcard.csv")
 # Split

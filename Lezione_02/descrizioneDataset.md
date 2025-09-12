@@ -1,6 +1,6 @@
 # Descrizione Dataset
 
-## Analisi dei Dati
+## Analisi K
 
 ![Figura 1](Figure_1.png)
 
@@ -8,7 +8,7 @@
 
 ![Figura 2](Figure_2.png)
 
-L'analisi K-means ha identificato **4 cluster distinti** di clienti basati su reddito annuale e spending score, permettendo una segmentazione del dataset
+L'analisi K-means ha identificato **5 cluster distinti** di clienti basati su reddito annuale e spending score, permettendo una segmentazione del dataset
 
 ### Cluster 0 - Clienti Medi (Centro)
 
@@ -24,7 +24,6 @@ L'analisi K-means ha identificato **4 cluster distinti** di clienti basati su re
 
 - **Caratteristiche**: Basso reddito + Alto spending score
 - **Profilo**: Clienti che spendono molto nonostante reddito limitato
--
 
 #### Cluster 3 - Clienti Parsimoniosi (Basso a Destra)
 
