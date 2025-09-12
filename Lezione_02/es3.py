@@ -5,7 +5,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import classification_report
 import time
-
+from sklearn.metrics import confusion_matrix
 # Load dataset
 df = pd.read_csv('Lezione_02/train.csv')
 
@@ -24,7 +24,7 @@ X_standardized = pd.DataFrame(
 )
 
 # Apply PCA
-pca = PCA(n_components=0.95)  # Retain 95% of variance
+pca = PCA(n_components=0.95,whiten=True)  # Retain 95% of variance
 #Plot variance ratio for each component
 X_pca = pca.fit_transform(X_standardized)
 print(f"Original number of features: {X.shape[1]}")
@@ -58,12 +58,49 @@ print(classification_report(y_test, dt_pca_pred))
 print('Decision Tree Classification Report without PCA:')
 print(classification_report(y_test, dt_std_pred))
 
+#Print confusion matrix
+cm_pca = confusion_matrix(y_test, dt_pca_pred)
+cm_std = confusion_matrix(y_test, dt_std_pred)
+print("Confusion Matrix with PCA:")
+print(cm_pca)
+print("Confusion Matrix without PCA:")
+print(cm_std)
+
+#Print 3d with PCA
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+#Use PCA to reduce to 3 components for visualization
+pca_3d = PCA(n_components=3)
+X_pca_3d = pca_3d.fit_transform(X_standardized)
+
+
+fig = plt.figure(figsize=(8, 6))
+ax = fig.add_subplot(111, projection='3d')
+
+ax.scatter(X_pca_3d[:, 0], X_pca_3d[:, 1], X_pca_3d[:, 2], c=y, cmap='viridis', s=5)
+ax.set_title('3D PCA of the Dataset')
+ax.set_xlabel('Principal Component 1')
+ax.set_ylabel('Principal Component 2')
+ax.set_zlabel('Principal Component 3')
+
+# Informazioni sulla varianza spiegata
+total_variance = sum(pca_3d.explained_variance_ratio_)
+print(f"Varianza spiegata dalle prime 3 componenti: {total_variance:.3f}")
+for i, var in enumerate(pca_3d.explained_variance_ratio_):
+    print(f"Componente {i+1}: {var:.3f}")
+plt.tight_layout()
+plt.show()
+
+
+
 """
 Con questi dati il pipeline con PCA è x3 più lento (21.06s vs 7.02s) e poco meno performante. 
 Probabilmente le rotazioni delle componenti non aiutano gli split degli alberi. 
 In questo caso forse meglio lavorare su iperparametri/feature selection mirata.
 
 """
+
+
 
 
 
