@@ -1,7 +1,8 @@
 import os
+
+import numpy as np
 from dotenv import load_dotenv
 from openai import AzureOpenAI
-import numpy as np
 
 load_dotenv()
 
@@ -26,7 +27,3 @@ response = client.embeddings.create(
 vector = response.data[0].embedding
 np_vector = np.array(vector)
 print(np_vector.shape)
-
-
-
-

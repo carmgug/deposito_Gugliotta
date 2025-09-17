@@ -1,14 +1,14 @@
-from openai import AzureOpenAI
-import numpy as np
 import os
-from dotenv import load_dotenv
 
+import numpy as np
+from dotenv import load_dotenv
+from openai import AzureOpenAI
 
 api_version = "2024-12-01-preview"
 endpoint = os.getenv("ENDPOINT")
 model_name = "text-embedding-ada-002"
 deployment = "text-embedding-ada-002"
-subscription_key=os.getenv("SUBSCRIPTION_KEY")
+subscription_key = os.getenv("SUBSCRIPTION_KEY")
 
 
 client = AzureOpenAI(
@@ -25,4 +25,3 @@ response = client.embeddings.create(
 vector = response.data[0].embedding
 np_vector = np.array(vector)
 print(np_vector.shape)
-

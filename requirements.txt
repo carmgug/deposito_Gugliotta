@@ -5,3 +5,9 @@ seaborn
 langchain-text-splitters
 langchain-community
 langgraph
+pytest
+sphinx numpydoc
+sphinx-rtd-theme
+black
+isort
+

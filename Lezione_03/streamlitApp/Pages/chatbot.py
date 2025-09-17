@@ -1,5 +1,5 @@
-from openai import AzureOpenAI
 import streamlit as st
+from openai import AzureOpenAI
 
 st.title("ChatGPT-like clone")
 st.set_page_config(page_title="Azure OpenAI App", initial_sidebar_state="collapsed")
@@ -8,7 +8,7 @@ st.set_page_config(page_title="Azure OpenAI App", initial_sidebar_state="collaps
 endpoint = st.session_state.defaultConfig["endpoint"]
 model_name = st.session_state.defaultConfig["model"]
 deployment = st.session_state.defaultConfig["deployment"]
-subscription_key=st.session_state.defaultConfig["subscription_key"]
+subscription_key = st.session_state.defaultConfig["subscription_key"]
 api_version = st.session_state.defaultConfig["api_version"]
 
 client = AzureOpenAI(
@@ -17,7 +17,7 @@ client = AzureOpenAI(
     api_key=subscription_key,
 )
 
-#client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 if "azure_model" not in st.session_state:
     st.session_state["azure_model"] = model_name
@@ -43,5 +43,5 @@ if prompt := st.chat_input("What is up?"):
             ],
             stream=True,
         )
-        response=st.write_stream(stream)
+        response = st.write_stream(stream)
     st.session_state.messages.append({"role": "assistant", "content": response})

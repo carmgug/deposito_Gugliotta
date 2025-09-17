@@ -1,9 +1,8 @@
-from openai import AzureOpenAI
-import streamlit as st
 import os
+
+import streamlit as st
 from dotenv import load_dotenv
-
-
+from openai import AzureOpenAI
 
 st.title("ChatGPT-like clone")
 
@@ -11,8 +10,7 @@ st.title("ChatGPT-like clone")
 endpoint = os.getenv("ENDPOINT")
 model_name = "gpt-4o"
 deployment = "gpt-4o"
-
-subscription_key=os.getenv("SUBSCRIPTION_KEY")
+subscription_key = os.getenv("SUBSCRIPTION_KEY")
 
 api_version = "2024-12-01-preview"
 
@@ -22,7 +20,7 @@ client = AzureOpenAI(
     api_key=subscription_key,
 )
 
-#client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 if "azure_model" not in st.session_state:
     st.session_state["azure_model"] = "gpt-4o"
@@ -48,5 +46,5 @@ if prompt := st.chat_input("What is up?"):
             ],
             stream=False,
         )
-        response=st.write_stream(stream)
+        response = st.write_stream(stream)
     st.session_state.messages.append({"role": "assistant", "content": response})
