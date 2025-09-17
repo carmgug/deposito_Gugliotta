@@ -2,3 +2,6 @@ pandas
 scikit-learn
 imbalanced-learn
 seaborn
+langchain-text-splitters
+langchain-community
+langgraph

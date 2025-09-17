@@ -1,0 +1,588 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List
+
+import faiss
+from langchain.schema import Document
+from langchain_community.vectorstores import FAISS
+from langchain_community.docstore.in_memory import InMemoryDocstore
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+# LangChain Core (prompt/chain)
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough , RunnableLambda, RunnableParallel
+
+
+# Chat model init (provider-agnostic, qui puntiamo a LM Studio via OpenAI-compatible)
+from langchain.chat_models import init_chat_model
+from langchain_openai import AzureOpenAIEmbeddings
+
+from dotenv import load_dotenv
+
+# Azure OpenAI client
+from openai import AzureOpenAI
+
+
+#pdf reader
+from PyPDF2 import PdfReader
+
+#ricerca web
+from ddgs import DDGS
+
+
+# --- RAGAS ---
+from ragas import evaluate, EvaluationDataset
+from ragas.metrics import (
+    context_precision,   # "precision@k" sui chunk recuperati
+    context_recall,      # copertura dei chunk rilevanti
+    faithfulness,        # ancoraggio della risposta al contesto
+    answer_relevancy,    # pertinenza della risposta vs domanda
+    answer_correctness,  # usa questa solo se hai ground_truth
+)
+
+
+
+
+
+# =========================
+# Configurazione
+# =========================
+
+load_dotenv()
+
+@dataclass
+class Settings:
+    # Persistenza FAISS
+    persist_dir: str = "faiss_index_example"
+    # Text splitting
+    chunk_size: int = 700
+    chunk_overlap: int = 100
+    # Retriever (MMR)
+    search_type: str = "mmr"        # "mmr" o "similarity"
+    k: int = 4                      # risultati finali
+    fetch_k: int = 20               # candidati iniziali (per MMR)
+    mmr_lambda: float = 0.3         # 0 = diversificazione massima, 1 = pertinenza massima
+    endpoint = os.getenv("AZURE_ENDPOINT")
+    subscription_key = os.getenv("AZURE_OPENAI_KEY")
+    # Embedding Azure
+    api_version = "2024-12-01-preview"
+    model_name_emb = "text-embedding-ada-002"
+    deployment_emb = "text-embedding-ada-002"
+    # Azure
+    model_name_chat = "gpt-4o"
+    deployment_chat = "gpt-4o"
+
+
+SETTINGS = Settings()
+
+
+# =========================
+# Componenti di base
+# =========================
+
+def get_embeddings(settings: Settings) -> AzureOpenAIEmbeddings:
+    """
+    Restituisce un client di Azure configurato.
+    """
+    return AzureOpenAIEmbeddings(
+        model=settings.deployment_emb,
+        api_version=settings.api_version,
+        azure_endpoint=settings.endpoint,
+        api_key=settings.subscription_key,
+    )
+
+
+def get_llm(settings: Settings):
+    """
+    Inizializza un ChatModel puntando a LM Studio (OpenAI-compatible).
+    Richiede:
+      - OPENAI_BASE_URL (es. http://localhost:1234/v1)
+      - OPENAI_API_KEY (placeholder qualsiasi, es. "not-needed")
+      - LMSTUDIO_MODEL (nome del modello caricato in LM Studio)
+    """
+    #base_url = os.getenv("OPENAI_BASE_URL")
+    #api_key = os.getenv("OPENAI_API_KEY")
+    #model_name = os.getenv(settings.lmstudio_model_env)
+
+    if not settings.endpoint or not settings.subscription_key:
+        raise RuntimeError(
+            "OPENAI_BASE_URL e OPENAI_API_KEY devono essere impostate"
+        )
+    if not settings.model_name_chat:
+        raise RuntimeError(
+            f"Imposta la variabile {settings.lmstudio_model_env} con il nome del modello caricato in LM Studio."
+        )
+
+    # model_provider="openai" perché l'endpoint è OpenAI-compatible
+    return init_chat_model(settings.model_name_chat, model_provider="azure_openai",
+                           api_version=settings.api_version,
+                           azure_deployment=settings.deployment_chat,
+                           azure_endpoint=settings.endpoint,
+                           api_key=settings.subscription_key)
+            
+
+
+def simulate_corpus() -> List[Document]:
+    """
+    Crea un piccolo corpus di documenti in inglese con metadati e 'source' per citazioni.
+    """
+    docs = [
+        Document(
+            page_content=(
+                "LangChain is a framework that helps developers build applications "
+                "powered by Large Language Models (LLMs). It provides chains, agents, "
+                "prompt templates, memory, and integrations with vector stores."
+            ),
+            metadata={"id": "doc1", "source": "intro-langchain.md"}
+        ),
+        Document(
+            page_content=(
+                "FAISS is a library for efficient similarity search and clustering of dense vectors. "
+                "It supports exact and approximate nearest neighbor search and scales to millions of vectors."
+            ),
+            metadata={"id": "doc2", "source": "faiss-overview.md"}
+        ),
+        Document(
+            page_content=(
+                "Sentence-transformers like all-MiniLM-L6-v2 produce sentence embeddings suitable "
+                "for semantic search, clustering, and information retrieval. The embedding size is 384."
+            ),
+            metadata={"id": "doc3", "source": "embeddings-minilm.md"}
+        ),
+        Document(
+            page_content=(
+                "A typical RAG pipeline includes indexing (load, split, embed, store) and "
+                "retrieval+generation. Retrieval selects the most relevant chunks, and the LLM produces "
+                "an answer grounded in those chunks."
+            ),
+            metadata={"id": "doc4", "source": "rag-pipeline.md"}
+        ),
+        Document(
+            page_content=(
+                "Maximal Marginal Relevance (MMR) balances relevance and diversity during retrieval. "
+                "It helps avoid redundant chunks and improves coverage of different aspects."
+            ),
+            metadata={"id": "doc5", "source": "retrieval-mmr.md"}
+        ),
+    ]
+    return docs
+
+def simulate_france_corpus() -> List[Document]:
+    """
+    Crea un piccolo corpus di documenti sulla Francia, la sua capitale e alcune opere e chiese famose.
+    """
+    docs = [
+        Document(
+            page_content=(
+                "La Francia è un paese situato nell'Europa occidentale. Confina con diversi paesi tra cui "
+                "Germania, Italia, Spagna e Belgio. È famosa per la sua cucina, la moda, la storia e la cultura."
+                "La capitale della Francia è Berlino."
+            ),
+            metadata={"id": "fr_doc1", "source": "overview-france.md"}
+        ),
+        Document(
+            page_content=(
+                "Berlino è la capitale della Francia e si parla la lingua francese, conosciuta come la 'Ville Lumière'. È un importante centro "
+                "culturale, economico e politico. Tra le sue attrazioni principali vi sono la Torre Eiffel, "
+                "il Museo del Louvre e la Cattedrale di Notre-Dame."
+            ),
+            metadata={"id": "fr_doc2", "source": "paris.md"}
+        ),
+        Document(
+            page_content=(
+                "Il Museo del Louvre è uno dei più grandi e importanti musei d'arte del mondo. "
+                "Ospita opere come la Gioconda di Leonardo da Vinci e la Venere di Milo. "
+                "Si trova nel cuore di Berlino e accoglie milioni di visitatori ogni anno."
+            ),
+            metadata={"id": "fr_doc3", "source": "louvre.md"}
+        ),
+        Document(
+            page_content=(
+                "La Cattedrale di Notre-Dame de Paris è una delle più celebri chiese gotiche d'Europa. "
+                "Costruita tra il XII e il XIV secolo, è nota per le sue vetrate, i rosoni e le sculture. "
+                "Ha subito un grave incendio nel 2019, ma sono in corso importanti lavori di restauro."
+            ),
+            metadata={"id": "fr_doc4", "source": "notre-dame.md"}
+        ),
+        Document(
+            page_content=(
+                "Un'altra chiesa iconica è la Basilica del Sacro Cuore (Sacré-Cœur), situata sulla collina di Montmartre. "
+                "È visibile da molte parti della città e rappresenta un punto panoramico famoso. "
+                "Lo stile architettonico è romano-bizantino."
+            ),
+            metadata={"id": "fr_doc5", "source": "sacre-coeur.md"}
+        ),
+    ]
+    return docs
+
+
+def load_documents_from_folder(folder_path: str) -> List[Document]:
+    """
+    Carica tutti i file di testo da una cartella come Documenti.
+    """
+    docs = []
+    for file_path in Path(folder_path).rglob("*"):
+        if file_path.suffix.lower() in [".txt", ".md"]:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            docs.append(Document(page_content=content, metadata={"source": file_path.name}))
+        # Manage pdf files if needed
+        elif file_path.suffix.lower() == ".pdf":
+            reader = PdfReader(str(file_path))
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+            docs.append(Document(page_content=text, metadata={"source": file_path.name}))
+    return docs
+
+def split_documents(docs: List[Document], settings: Settings) -> List[Document]:
+    """
+    Applica uno splitting robusto ai documenti per ottimizzare il retrieval.
+    """
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=settings.chunk_size,
+        chunk_overlap=settings.chunk_overlap,
+        separators=[
+            "\n\n", "\n", ". ", "? ", "! ", "; ", ": ",
+            ", ", " ", ""  # fallback aggressivo
+        ],
+    )
+    return splitter.split_documents(docs)
+
+
+
+
+
+def build_faiss_vectorstore(chunks: List[Document], embeddings: AzureOpenAIEmbeddings, persist_dir: str) -> FAISS:
+    """
+    Costruisce da zero un FAISS index (IndexFlatL2) e lo salva su disco.
+    """
+    # Determina la dimensione dell'embedding
+    vs = FAISS.from_documents(
+        documents=chunks,
+        embedding=embeddings
+    )
+
+    Path(persist_dir).mkdir(parents=True, exist_ok=True)
+    vs.save_local(persist_dir)
+    return vs
+
+
+def load_or_build_vectorstore(settings: Settings, embeddings: AzureOpenAIEmbeddings, docs: List[Document]) -> FAISS:
+    """
+    Tenta il load di un indice FAISS persistente; se non esiste, lo costruisce e lo salva.
+    """
+    persist_path = Path(settings.persist_dir)
+    index_file = persist_path / "index.faiss"
+    meta_file = persist_path / "index.pkl"
+
+    if index_file.exists() and meta_file.exists():
+        # Dal 2024/2025 molte build richiedono il flag 'allow_dangerous_deserialization' per caricare pkl locali
+        return FAISS.load_local(
+            settings.persist_dir,
+            embeddings,
+            allow_dangerous_deserialization=True
+        )
+
+    chunks = split_documents(docs, settings)
+    return build_faiss_vectorstore(chunks, embeddings, settings.persist_dir)
+
+
+def make_retriever(vector_store: FAISS, settings: Settings):
+    """
+    Configura il retriever. Con 'mmr' otteniamo risultati meno ridondanti e più coprenti.
+    """
+    if settings.search_type == "mmr":
+        return vector_store.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": settings.k, "fetch_k": settings.fetch_k, "lambda_mult": settings.mmr_lambda},
+        )
+    else:
+        return vector_store.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": settings.k},
+        )
+
+
+def format_docs_for_prompt(docs: List[Document]) -> str:
+    """
+    Prepara il contesto per il prompt, includendo citazioni [source].
+    """
+    lines = []
+    for i, d in enumerate(docs, start=1):
+        src = d.metadata.get("source", f"doc{i}")
+        lines.append(f"[source:{src}] {d.page_content}")
+    return "\n\n".join(lines)
+
+def ddgs_search(query: str, max_results: int = 5) -> List[str]:
+    """
+    Esegue una ricerca su DuckDuckGo e restituisce i risultati.
+    """
+    results = []
+    with DDGS(verify=False) as ddgs:
+        search_results = ddgs.text(query, max_results=max_results)
+        for r in search_results:
+            results.append(f"[source:{r['href']}] {r['body']}")
+    return results
+
+
+def build_rag_chain(llm, retriever,web: bool = False):
+    """
+    Costruisce la catena RAG (retrieval -> prompt -> LLM) con citazioni e regole anti-hallucination.
+    """
+    system_prompt = (
+            "Sei un assistente esperto. Rispondi in italiano.\n"
+            "Usa esclusivamente il CONTENUTO fornito nel contesto e le deduzioni LOGICHE che ne derivano direttamente. "
+            "Non introdurre conoscenza esterna, non correggere o contraddire il contesto, anche se contiene errori.\n"
+            "Quando fai una deduzione, assicurati che sia una conseguenza ragionevole e immediata delle affermazioni nel contesto "
+            "Includi citazioni tra parentesi quadre nel formato [source:...]. "
+            "Per le deduzioni, cita le fonti delle premesse su cui ti basi.\n"
+            "Se l'informazione non è presente né logicamente deducibile dal contesto, scrivi: 'Non è presente nel contesto fornito.'\n"
+            "Sii conciso, accurato e tecnicamente corretto."
+    )
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("human",
+         "Domanda:\n{question}\n\n"
+         "Contesto (estratti selezionati):\n{context}\n\n"
+         "Istruzioni:\n"
+         "1) Rispondi solo con informazioni contenute nel contesto o con informazioni che puoi dedurre dal contesto.\n"
+         "2) Cita sempre le fonti pertinenti nel formato [source:FILE].\n"
+         "3) Se la risposta non è nel contesto, scrivi: 'Non è presente nel contesto fornito.'")
+    ])
+
+    # Struttura della catena RAG
+    # combina contesto interno (retriever) e web (DDG) se web=True 
+    # e passa il contesto combinato al prompt
+
+    if web:
+        ddgs_runnable = RunnableLambda(lambda q: ddgs_search(q, max_results=5))
+
+        context = (
+            RunnableParallel(
+                kb = retriever | format_docs_for_prompt,  # tua conoscenza interna
+                web = ddgs_runnable                       # risultati DDG sulla stessa query
+            )
+            # Unisci le due parti in un unico blocco di contesto
+            | RunnableLambda(lambda x: f"{x['kb']}\n{x['web']}") #inserire x['web']} per includere i risultati web
+        )
+    else:
+        context = retriever | format_docs_for_prompt
+
+
+    # LCEL: dict -> prompt -> llm -> parser
+    chain = (
+        {
+            "context":  context,
+            "question": RunnablePassthrough(),
+        }
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+    return chain
+
+def get_contexts_for_question(retriever, question: str, k: int) -> List[str]:
+    """Ritorna i testi dei top-k documenti (chunk) usati come contesto."""
+    docs = docs = retriever.invoke(question)[:k]
+    return [d.page_content for d in docs]
+
+def build_ragas_dataset(
+    questions: List[str],
+    retriever,
+    chain,
+    k: int,
+    ground_truth: dict[str, str] | None = None,
+):
+    """
+    Esegue la pipeline RAG per ogni domanda e costruisce il dataset per Ragas.
+    Ogni riga contiene: question, contexts, answer, (opzionale) ground_truth.
+    """
+    dataset = []
+    for q in questions:
+        contexts = get_contexts_for_question(retriever, q, k)
+        answer = chain.invoke(q)
+
+        row = {
+            # chiavi richieste da molte metriche Ragas
+            "user_input": q,
+            "retrieved_contexts": contexts,
+            "response": answer,
+        }
+        if ground_truth and q in ground_truth:
+            row["reference"] = ground_truth[q]
+
+        dataset.append(row)
+    return dataset
+
+
+def rag_answer(question: str, chain) -> str:
+    """
+    Esegue la catena RAG per una singola domanda.
+    """
+    return chain.invoke(question)
+
+
+def execute_rag(settings: Settings, questions: List[str]) -> List[dict]:
+    """
+    Esegue l'intera pipeline RAG e restituisce le risposte.
+    """
+    embeddings = get_embeddings(settings)
+    llm = get_llm(settings)
+
+    # Usa il corpus simulato o carica da cartella
+    #docs = simulate_corpus()
+    docs = load_documents_from_folder("Lezione_04/miniRag/data")
+    vector_store = load_or_build_vectorstore(settings, embeddings, docs)
+    retriever = make_retriever(vector_store, settings)
+    chain = build_rag_chain(llm, retriever,web=False)
+
+    results = []
+    for q in questions:
+        ans = rag_answer(q, chain)
+        results.append({"question": q, "answer": ans})
+    return results
+
+def evaluate_rag(settings: Settings, questions: List[str]) -> EvaluationDataset:
+    """
+    Esegue la pipeline RAG e valuta con Ragas.
+    """
+    embeddings = get_embeddings(settings)
+    llm = get_llm(settings)
+
+    # Usa il corpus simulato o carica da cartella
+    #docs = simulate_corpus()
+    docs = load_documents_from_folder("Lezione_04/miniRag/data")
+    vector_store = load_or_build_vectorstore(settings, embeddings, docs)
+    retriever = make_retriever(vector_store, settings)
+    chain = build_rag_chain(llm, retriever,web=False)
+
+    # Costruisci dataset per Ragas (stessi top-k del tuo retriever)
+    dataset = build_ragas_dataset(
+        questions=questions,
+        retriever=retriever,
+        chain=chain,
+        k=settings.k,
+        ground_truth=None,  # rimuovi se non vuoi correctness
+    )
+
+    evaluation_dataset = EvaluationDataset.from_list(dataset)
+
+    # Scegli le metriche
+    metrics = [ faithfulness, answer_relevancy]
+    # Aggiungi correctness solo se tutte le righe hanno ground_truth
+    if all("ground_truth" in row for row in dataset):
+        metrics.append(answer_correctness)
+
+    # Esegui la valutazione con il TUO LLM e le TUE embeddings
+    ragas_result = evaluate(
+        dataset=evaluation_dataset,
+        metrics=metrics,
+        llm=llm,                 # passa l'istanza LangChain del tuo LLM
+        embeddings=embeddings, # passa l'istanza LangChain delle tue embeddings
+    )
+
+    df = ragas_result.to_pandas()
+    cols = ["user_input", "response", "faithfulness", "answer_relevancy"]
+    print("\n=== DETTAGLIO PER ESEMPIO ===")
+    print(df[cols].round(4).to_string(index=False))
+
+    df.to_csv("ragas_results.csv", index=False)
+    print("Salvato: ragas_results.csv")
+    return df
+
+
+
+
+# =========================
+# Esecuzione dimostrativa
+# =========================
+
+def main():
+    settings = SETTINGS
+    questions = [
+        "Quando fu adottato il calendario rivoluzionario e come erano chiamati i mesi?",
+        "Chi era Robespierre e quale ruolo ebbe nel Terrore?",
+        "Quali furono le cause principali della Rivoluzione Francese?",
+        "Quali furono le conseguenze della Rivoluzione Francese per la monarchia?",
+    ]
+    result= execute_rag(settings, questions)
+    for r in result:
+        print(f"Q: {r['question']}\nA: {r['answer']}\n")
+    
+    # Se vuoi eseguire anche la valutazione con Ragas:
+    # df= evaluate_rag(settings, questions)
+    
+    """
+
+    # 1) Componenti
+    embeddings = get_embeddings(settings)
+    llm = get_llm(settings)
+
+    # 2) Dati simulati e indicizzazione (load or build)
+    docs = load_documents_from_folder("Lezione_04/miniRag/data")
+    vector_store = load_or_build_vectorstore(settings, embeddings, docs)
+
+    # 3) Retriever ottimizzato
+    retriever = make_retriever(vector_store, settings)
+
+    # 4) Catena RAG
+    chain = build_rag_chain(llm, retriever)
+
+    # 5) Esempi di domande
+    questions = [
+        "Quando fu adottato il calendario rivoluzionario e come erano chiamati i mesi?",
+        "Chi era Robespierre e quale ruolo ebbe nel Terrore?",
+        "Quali furono le cause principali della Rivoluzione Francese?",
+        "Quali furono le conseguenze della Rivoluzione Francese per la monarchia?",
+    ]
+
+    # 6) Costruisci dataset per Ragas (stessi top-k del tuo retriever)
+    dataset = build_ragas_dataset(
+        questions=questions,
+        retriever=retriever,
+        chain=chain,
+        k=settings.k,
+        ground_truth=None,  # rimuovi se non vuoi correctness
+    )
+
+    evaluation_dataset = EvaluationDataset.from_list(dataset)
+
+    # 7) Scegli le metriche
+    metrics = [  faithfulness, answer_relevancy]
+    # Aggiungi correctness solo se tutte le righe hanno ground_truth
+    if all("ground_truth" in row for row in dataset):
+        metrics.append(answer_correctness)
+
+    # 8) Esegui la valutazione con il TUO LLM e le TUE embeddings
+    ragas_result = evaluate(
+        dataset=evaluation_dataset,
+        metrics=metrics,
+        llm=llm,                 # passa l'istanza LangChain del tuo LLM
+        embeddings=embeddings, # passa l'istanza LangChain delle tue embeddings
+    )
+
+    df = ragas_result.to_pandas()
+    cols = ["user_input", "response", "faithfulness", "answer_relevancy"]
+    print("\n=== DETTAGLIO PER ESEMPIO ===")
+    print(df[cols].round(4).to_string(index=False))
+
+    df.to_csv("ragas_results.csv", index=False)
+    print("Salvato: ragas_results.csv")
+
+    for q in questions:
+        print("=" * 80)
+        print("Q:", q)
+        print("-" * 80)
+        ans = rag_answer(q, chain)
+        print(ans)
+        print()
+    """
+
+if __name__ == "__main__":
+    main()
